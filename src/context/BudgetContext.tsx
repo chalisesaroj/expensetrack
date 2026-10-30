@@ -1,13 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { KEY, ADDED_V2 } from '../constants';
 import { BudgetConfig, Category, Calculations, SpendEntry, SpendFormState, TabType } from '../types';
 import { calc, defCats, defCfg, num, today, uid } from '../utils';
 import {
   getSupabase,
-  upsertSingleSpend,
+  fetchRemoteBudgetData,
+  saveSpendToSupabase,
   deleteSpendFromSupabase,
-  upsertSingleCategory,
+  saveCategoryToSupabase,
   deleteCategoryFromSupabase,
+  saveConfigToSupabase,
+  resetUserDataInSupabase,
 } from '../lib/supabase';
 import type { User } from '@supabase/supabase-js';
 
@@ -18,6 +20,10 @@ export interface ExportState {
 }
 
 interface BudgetContextType {
+  user: User | null;
+  loadingAuth: boolean;
+  loadingData: boolean;
+  signOut: () => Promise<void>;
   tab: TabType;
   setTab: (t: TabType) => void;
   cats: Category[];
@@ -44,13 +50,17 @@ interface BudgetContextType {
   updateIncome: (src: string, fld: 'salary' | 'other', val: number) => void;
   updatePeriod: (field: 'periodStart' | 'periodEnd', val: string) => boolean;
   restoreData: (data: { cfg?: BudgetConfig; cats: Category[]; spends: SpendEntry[] }) => boolean;
-  resetToStartingBudgets: () => void;
+  resetToStartingBudgets: () => Promise<void>;
   getDownloadBackupBlob: () => Blob;
 }
 
 const BudgetContext = createContext<BudgetContextType | undefined>(undefined);
 
 export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [loadingData, setLoadingData] = useState(false);
+
   const [tab, setTabState] = useState<TabType>(() => {
     const hash = window.location.hash.replace('#', '') as TabType;
     if (['overview', 'entries', 'budget', 'income'].includes(hash)) {
@@ -61,82 +71,11 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-  // Track authenticated Supabase user for real-time live sync
-  useEffect(() => {
-    const supabase = getSupabase();
-    if (!supabase) return;
-
-    supabase.auth.getUser().then(({ data }) => {
-      setCurrentUser(data.user || null);
-    });
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUser(session?.user || null);
-    });
-
-    return () => {
-      sub.subscription.unsubscribe();
-    };
-  }, []);
-
-  const [cats, setCats] = useState<Category[]>(() => {
-    try {
-      const saved = localStorage.getItem(KEY);
-      if (saved) {
-        const j = JSON.parse(saved);
-        if (j && Array.isArray(j.cats)) {
-          const loadedCats: Category[] = j.cats;
-          if (!j.v || j.v < 2) {
-            ADDED_V2.forEach((n) => {
-              if (!loadedCats.some((c) => String(c.name).toLowerCase() === n.toLowerCase())) {
-                const maxOrder = loadedCats.reduce((m, k) => Math.max(m, k.order || 0), 0);
-                loadedCats.push({ id: uid('c'), name: n, budget: 0, order: maxOrder + 1 });
-              }
-            });
-          }
-          return loadedCats;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return defCats();
-  });
-
-  const [spends, setSpends] = useState<SpendEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem(KEY);
-      if (saved) {
-        const j = JSON.parse(saved);
-        if (j && Array.isArray(j.spends)) {
-          return j.spends;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return [];
-  });
-
-  const [cfg, setCfg] = useState<BudgetConfig>(() => {
-    const d = defCfg();
-    try {
-      const saved = localStorage.getItem(KEY);
-      if (saved) {
-        const j = JSON.parse(saved);
-        if (j && j.cfg) {
-          const merged = { ...d, ...j.cfg };
-          merged.income = { ...d.income, ...(j.cfg.income || {}) };
-          return merged;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return d;
-  });
+  // Data states (cloud-only, zero localStorage)
+  const [cats, setCats] = useState<Category[]>([]);
+  const [spends, setSpends] = useState<SpendEntry[]>([]);
+  const [cfg, setCfg] = useState<BudgetConfig>(defCfg());
 
   const [form, setForm] = useState<SpendFormState>({
     cat: '',
@@ -166,14 +105,77 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
-  // Sync state to local storage
+  // 1. Listen for Supabase Authentication
   useEffect(() => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify({ v: 2, cfg, cats, spends }));
-    } catch {
-      showToast('This browser blocked saving. Use Download backup on the Income tab.');
+    const supabase = getSupabase();
+    if (!supabase) {
+      setLoadingAuth(false);
+      return;
     }
-  }, [cfg, cats, spends, showToast]);
+
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user || null);
+      setLoadingAuth(false);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+      setLoadingAuth(false);
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  // 2. Fetch data from Supabase whenever user is logged in
+  useEffect(() => {
+    if (!user) {
+      setCats([]);
+      setSpends([]);
+      setCfg(defCfg());
+      return;
+    }
+
+    let isMounted = true;
+    setLoadingData(true);
+
+    fetchRemoteBudgetData(user.id)
+      .then((data) => {
+        if (!isMounted) return;
+        if (data) {
+          setCats(data.cats);
+          setSpends(data.spends);
+          setCfg(data.cfg);
+          if (data.cats.length > 0) {
+            setForm((f) => ({ ...f, cat: data.cats[0].id }));
+          }
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load user budget from Supabase:', err);
+        showToast('Error loading your ledger from Supabase.');
+      })
+      .finally(() => {
+        if (isMounted) setLoadingData(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user, showToast]);
+
+  const signOut = useCallback(async () => {
+    const supabase = getSupabase();
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    setUser(null);
+    setCats([]);
+    setSpends([]);
+    setCfg(defCfg());
+    showToast('Signed out successfully');
+  }, [showToast]);
 
   // Derived calculations
   const calculations = useMemo(() => {
@@ -212,6 +214,10 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [spends]);
 
   const saveSpend = useCallback((catId: string, amountStr: string, dateStr: string, noteStr: string): boolean => {
+    if (!user) {
+      showToast('You must be signed in.');
+      return false;
+    }
     const amt = num(amountStr);
     if (!catId || amt <= 0) {
       showToast('Choose a category and enter an amount above zero.');
@@ -248,10 +254,8 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setSpends((prev) => [...prev, spendItem]);
     }
 
-    // Auto-sync in real-time if signed into Supabase
-    if (currentUser) {
-      upsertSingleSpend(currentUser.id, spendItem);
-    }
+    // Direct write to Supabase
+    saveSpendToSupabase(user.id, spendItem);
 
     setForm({
       cat: catId,
@@ -265,18 +269,18 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const formattedLeft = (left < 0 ? '−' : '') + 'Rs ' + nf.format(Math.abs(left));
     showToast(`Saved. ${cat.name} has ${formattedLeft} left${left < 0 ? ' (over budget).' : '.'}`);
     return true;
-  }, [cats, calculations.by, form.edit, spends, currentUser, showToast]);
+  }, [user, cats, calculations.by, form.edit, spends, showToast]);
 
   const deleteSpend = useCallback((id: string) => {
+    if (!user) return;
     setSpends((prev) => prev.filter((x) => x.id !== id));
     setArmed(null);
-    if (currentUser) {
-      deleteSpendFromSupabase(currentUser.id, id);
-    }
+    deleteSpendFromSupabase(user.id, id);
     showToast('Entry deleted');
-  }, [currentUser, showToast]);
+  }, [user, showToast]);
 
   const addCategory = useCallback((name: string, budget: number): boolean => {
+    if (!user) return false;
     const trimmed = name.trim();
     if (!trimmed) {
       showToast('Give the category a name.');
@@ -285,54 +289,50 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const maxOrder = cats.reduce((m, k) => Math.max(m, k.order || 0), 0);
     const newCat: Category = { id: uid('c'), name: trimmed, budget: num(budget), order: maxOrder + 1 };
     setCats((prev) => [...prev, newCat]);
-    if (currentUser) {
-      upsertSingleCategory(currentUser.id, newCat);
-    }
+    saveCategoryToSupabase(user.id, newCat);
     showToast('Category added');
     return true;
-  }, [cats, currentUser, showToast]);
+  }, [user, cats, showToast]);
 
   const updateCategoryName = useCallback((id: string, name: string): boolean => {
+    if (!user) return false;
     const trimmed = name.trim();
     if (!trimmed) {
       showToast('A category needs a name.');
       return false;
     }
     setCats((prev) => prev.map((c) => (c.id === id ? { ...c, name: trimmed } : c)));
-    if (currentUser) {
-      const existing = cats.find((c) => c.id === id);
-      if (existing) {
-        upsertSingleCategory(currentUser.id, { ...existing, name: trimmed });
-      }
+    const existing = cats.find((c) => c.id === id);
+    if (existing) {
+      saveCategoryToSupabase(user.id, { ...existing, name: trimmed });
     }
     return true;
-  }, [cats, currentUser, showToast]);
+  }, [user, cats, showToast]);
 
   const updateCategoryBudget = useCallback((id: string, budget: number) => {
+    if (!user) return;
     setCats((prev) => prev.map((c) => (c.id === id ? { ...c, budget: num(budget) } : c)));
-    if (currentUser) {
-      const existing = cats.find((c) => c.id === id);
-      if (existing) {
-        upsertSingleCategory(currentUser.id, { ...existing, budget: num(budget) });
-      }
+    const existing = cats.find((c) => c.id === id);
+    if (existing) {
+      saveCategoryToSupabase(user.id, { ...existing, budget: num(budget) });
     }
     showToast('Budget updated');
-  }, [cats, currentUser, showToast]);
+  }, [user, cats, showToast]);
 
   const deleteCategory = useCallback((id: string): boolean => {
+    if (!user) return false;
     setCats((prev) => prev.filter((x) => x.id !== id));
     setArmed(null);
-    if (currentUser) {
-      deleteCategoryFromSupabase(currentUser.id, id);
-    }
+    deleteCategoryFromSupabase(user.id, id);
     showToast('Category deleted');
     return true;
-  }, [currentUser, showToast]);
+  }, [user, showToast]);
 
   const updateIncome = useCallback((src: string, fld: 'salary' | 'other', val: number) => {
+    if (!user) return;
     setCfg((prev) => {
       const srcObj = prev.income[src] || { salary: 0, other: 0 };
-      return {
+      const updated = {
         ...prev,
         income: {
           ...prev.income,
@@ -342,11 +342,14 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           },
         },
       };
+      saveConfigToSupabase(user.id, updated);
+      return updated;
     });
     showToast('Income updated');
-  }, [showToast]);
+  }, [user, showToast]);
 
   const updatePeriod = useCallback((field: 'periodStart' | 'periodEnd', val: string): boolean => {
+    if (!user) return false;
     const s = field === 'periodStart' ? val : cfg.periodStart;
     const e = field === 'periodEnd' ? val : cfg.periodEnd;
     const parse = (str: string) => {
@@ -359,12 +362,17 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return false;
     }
 
-    setCfg((prev) => ({ ...prev, [field]: val }));
+    setCfg((prev) => {
+      const updated = { ...prev, [field]: val };
+      saveConfigToSupabase(user.id, updated);
+      return updated;
+    });
     showToast('Budget year updated');
     return true;
-  }, [cfg.periodStart, cfg.periodEnd, showToast]);
+  }, [user, cfg.periodStart, cfg.periodEnd, showToast]);
 
   const restoreData = useCallback((data: { cfg?: BudgetConfig; cats: Category[]; spends: SpendEntry[] }): boolean => {
+    if (!user) return false;
     if (!data || !Array.isArray(data.cats) || !Array.isArray(data.spends)) {
       showToast('That file is not a Budget Book backup.');
       return false;
@@ -376,19 +384,31 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setCats(data.cats);
     setSpends(data.spends);
     setCfg(mergedCfg);
-    setForm({ cat: '', amount: '', date: today(), note: '', edit: null });
+    setForm({ cat: data.cats[0]?.id || '', amount: '', date: today(), note: '', edit: null });
     setArmed(null);
-    showToast('Backup restored');
-    return true;
-  }, [showToast]);
 
-  const resetToStartingBudgets = useCallback(() => {
-    setCats(defCats());
-    setSpends([]);
-    setForm({ cat: '', amount: '', date: today(), note: '', edit: null });
-    setArmed(null);
-    showToast('Budgets reset. Income was kept.');
-  }, [showToast]);
+    // Save to Supabase
+    saveConfigToSupabase(user.id, mergedCfg);
+    data.cats.forEach((c) => saveCategoryToSupabase(user.id, c));
+    data.spends.forEach((s) => saveSpendToSupabase(user.id, s));
+
+    showToast('Backup restored and saved to Supabase');
+    return true;
+  }, [user, showToast]);
+
+  const resetToStartingBudgets = useCallback(async () => {
+    if (!user) return;
+    try {
+      const fresh = await resetUserDataInSupabase(user.id);
+      setCats(fresh.cats);
+      setSpends(fresh.spends);
+      setForm({ cat: fresh.cats[0]?.id || '', amount: '', date: today(), note: '', edit: null });
+      setArmed(null);
+      showToast('Budgets reset in Supabase. Income was kept.');
+    } catch {
+      showToast('Failed to reset budgets in Supabase.');
+    }
+  }, [user, showToast]);
 
   const getDownloadBackupBlob = useCallback((): Blob => {
     return new Blob([JSON.stringify({ cfg, cats, spends }, null, 2)], {
@@ -399,6 +419,10 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   return (
     <BudgetContext.Provider
       value={{
+        user,
+        loadingAuth,
+        loadingData,
+        signOut,
         tab,
         setTab,
         cats,

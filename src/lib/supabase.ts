@@ -1,8 +1,6 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import { BudgetConfig, Category, SpendEntry } from '../types';
-
-const STORAGE_URL_KEY = 'budget_supabase_url';
-const STORAGE_ANON_KEY = 'budget_supabase_anon_key';
+import { defCats, defCfg } from '../utils';
 
 let cachedClient: SupabaseClient | null = null;
 let currentUrl = '';
@@ -27,73 +25,22 @@ export function cleanSupabaseUrl(raw: string): string {
 }
 
 export function cleanSupabaseKey(raw: string): string {
-  const k = raw.trim();
-  if (!k) return '';
-  try {
-    const parts = k.split('.');
-    if (parts.length >= 2) {
-      const payload = JSON.parse(atob(parts[1]));
-      if (payload.role === 'service_role') {
-        localStorage.removeItem(STORAGE_ANON_KEY);
-        return DEFAULT_SUPABASE_ANON_KEY;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return k;
+  return raw.trim();
 }
 
-export function getSupabaseCredentials(): { url: string; key: string; isConfigured: boolean } {
+export function getSupabaseCredentials(): { url: string; key: string } {
   const envUrl = import.meta.env.VITE_SUPABASE_URL || '';
   const envKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-  const localUrl = localStorage.getItem(STORAGE_URL_KEY) || '';
-  const localKey = localStorage.getItem(STORAGE_ANON_KEY) || '';
+  const url = cleanSupabaseUrl(envUrl || DEFAULT_SUPABASE_URL);
+  const key = cleanSupabaseKey(envKey || DEFAULT_SUPABASE_ANON_KEY);
 
-  const rawUrl = envUrl || localUrl || DEFAULT_SUPABASE_URL;
-  const rawKey = envKey || localKey || DEFAULT_SUPABASE_ANON_KEY;
-
-  const url = cleanSupabaseUrl(rawUrl);
-  const key = cleanSupabaseKey(rawKey);
-
-  if (localUrl && localUrl !== url) {
-    localStorage.setItem(STORAGE_URL_KEY, url);
-  }
-
-  return {
-    url,
-    key,
-    isConfigured: Boolean(url && key),
-  };
-}
-
-export function resetToDefaultSupabaseCredentials() {
-  localStorage.removeItem(STORAGE_URL_KEY);
-  localStorage.removeItem(STORAGE_ANON_KEY);
-  cachedClient = null;
-  currentUrl = '';
-  currentKey = '';
-}
-
-export function saveCustomSupabaseCredentials(url: string, key: string) {
-  const cleanUrl = cleanSupabaseUrl(url);
-  const cleanKey = cleanSupabaseKey(key);
-
-  if (cleanUrl) localStorage.setItem(STORAGE_URL_KEY, cleanUrl);
-  else localStorage.removeItem(STORAGE_URL_KEY);
-
-  if (cleanKey) localStorage.setItem(STORAGE_ANON_KEY, cleanKey);
-  else localStorage.removeItem(STORAGE_ANON_KEY);
-
-  cachedClient = null;
-  currentUrl = '';
-  currentKey = '';
+  return { url, key };
 }
 
 export function getSupabase(): SupabaseClient | null {
-  const { url, key, isConfigured } = getSupabaseCredentials();
-  if (!isConfigured) return null;
+  const { url, key } = getSupabaseCredentials();
+  if (!url || !key) return null;
 
   if (cachedClient && currentUrl === url && currentKey === key) {
     return cachedClient;
@@ -118,9 +65,9 @@ export function getSupabase(): SupabaseClient | null {
 // ----------------- Supabase Data Operations -----------------
 
 export async function fetchRemoteBudgetData(userId: string): Promise<{
-  cats?: Category[];
-  spends?: SpendEntry[];
-  cfg?: BudgetConfig;
+  cats: Category[];
+  spends: SpendEntry[];
+  cfg: BudgetConfig;
 } | null> {
   const supabase = getSupabase();
   if (!supabase || !userId) return null;
@@ -134,6 +81,11 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
 
     if (catsRes.error) throw catsRes.error;
     if (spendsRes.error) throw spendsRes.error;
+
+    // If user has no categories yet, initialize with defaults directly in Supabase
+    if (!catsRes.data || catsRes.data.length === 0) {
+      return await seedInitialUserData(userId);
+    }
 
     const cats: Category[] = (catsRes.data || []).map((row) => ({
       id: String(row.id),
@@ -151,13 +103,23 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
       created: row.created ? Number(row.created) : undefined,
     }));
 
-    let cfg: BudgetConfig | undefined = undefined;
+    const d = defCfg();
+    let cfg: BudgetConfig = d;
     if (cfgRes.data) {
       cfg = {
-        periodStart: cfgRes.data.period_start,
-        periodEnd: cfgRes.data.period_end,
-        income: cfgRes.data.income || {},
+        periodStart: cfgRes.data.period_start || d.periodStart,
+        periodEnd: cfgRes.data.period_end || d.periodEnd,
+        income: { ...d.income, ...(cfgRes.data.income || {}) },
       };
+    } else {
+      // Seed default config for this user in Supabase
+      await supabase.from('budget_config').upsert({
+        user_id: userId,
+        period_start: d.periodStart,
+        period_end: d.periodEnd,
+        income: d.income,
+        updated_at: new Date().toISOString(),
+      });
     }
 
     return { cats, spends, cfg };
@@ -167,18 +129,15 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
   }
 }
 
-export async function pushFullBudgetToSupabase(
-  userId: string,
-  cats: Category[],
-  spends: SpendEntry[],
-  cfg: BudgetConfig
-): Promise<{ catsCount: number; spendsCount: number }> {
+export async function seedInitialUserData(userId: string): Promise<{
+  cats: Category[];
+  spends: SpendEntry[];
+  cfg: BudgetConfig;
+}> {
   const supabase = getSupabase();
-  if (!supabase || !userId) throw new Error('Supabase client or user ID is missing');
-
-  // 1. Sync Categories
-  let catsCount = 0;
-  if (cats.length > 0) {
+  const cats = defCats();
+  const cfg = defCfg();
+  if (supabase && userId) {
     const catRows = cats.map((c) => ({
       id: String(c.id),
       user_id: userId,
@@ -186,51 +145,19 @@ export async function pushFullBudgetToSupabase(
       budget: Number(c.budget) || 0,
       order_num: Number(c.order) || 0,
     }));
-    const { error: catErr } = await supabase.from('budget_categories').upsert(catRows);
-    if (catErr) {
-      console.error('Error upserting categories:', catErr);
-      throw new Error(`Failed to sync categories: ${catErr.message}`);
-    }
-    catsCount = catRows.length;
-  }
-
-  // 2. Sync Spends
-  let spendsCount = 0;
-  if (spends.length > 0) {
-    const spendRows = spends.map((s) => ({
-      id: String(s.id),
+    await supabase.from('budget_categories').upsert(catRows);
+    await supabase.from('budget_config').upsert({
       user_id: userId,
-      cat: String(s.cat),
-      amount: Number(s.amount) || 0,
-      date: String(s.date),
-      note: String(s.note || ''),
-      created: s.created ? Number(s.created) : Date.now(),
-    }));
-    const { error: spendErr } = await supabase.from('budget_spends').upsert(spendRows);
-    if (spendErr) {
-      console.error('Error upserting spends:', spendErr);
-      throw new Error(`Failed to sync expenses: ${spendErr.message}`);
-    }
-    spendsCount = spendRows.length;
+      period_start: cfg.periodStart,
+      period_end: cfg.periodEnd,
+      income: cfg.income,
+      updated_at: new Date().toISOString(),
+    });
   }
-
-  // 3. Sync Config
-  const { error: cfgErr } = await supabase.from('budget_config').upsert({
-    user_id: userId,
-    period_start: cfg.periodStart,
-    period_end: cfg.periodEnd,
-    income: cfg.income,
-    updated_at: new Date().toISOString(),
-  });
-  if (cfgErr) {
-    console.error('Error upserting config:', cfgErr);
-    throw new Error(`Failed to sync config: ${cfgErr.message}`);
-  }
-
-  return { catsCount, spendsCount };
+  return { cats, spends: [], cfg };
 }
 
-export async function upsertSingleSpend(userId: string, s: SpendEntry) {
+export async function saveSpendToSupabase(userId: string, s: SpendEntry) {
   const supabase = getSupabase();
   if (!supabase || !userId) return;
   try {
@@ -245,7 +172,7 @@ export async function upsertSingleSpend(userId: string, s: SpendEntry) {
     };
     await supabase.from('budget_spends').upsert(row);
   } catch (e) {
-    console.error('Auto-sync spend error:', e);
+    console.error('Save spend error in Supabase:', e);
   }
 }
 
@@ -255,11 +182,11 @@ export async function deleteSpendFromSupabase(userId: string, spendId: string) {
   try {
     await supabase.from('budget_spends').delete().match({ user_id: userId, id: spendId });
   } catch (e) {
-    console.error('Delete spend error:', e);
+    console.error('Delete spend error in Supabase:', e);
   }
 }
 
-export async function upsertSingleCategory(userId: string, c: Category) {
+export async function saveCategoryToSupabase(userId: string, c: Category) {
   const supabase = getSupabase();
   if (!supabase || !userId) return;
   try {
@@ -272,7 +199,7 @@ export async function upsertSingleCategory(userId: string, c: Category) {
     };
     await supabase.from('budget_categories').upsert(row);
   } catch (e) {
-    console.error('Auto-sync category error:', e);
+    console.error('Save category error in Supabase:', e);
   }
 }
 
@@ -282,6 +209,31 @@ export async function deleteCategoryFromSupabase(userId: string, catId: string) 
   try {
     await supabase.from('budget_categories').delete().match({ user_id: userId, id: catId });
   } catch (e) {
-    console.error('Delete category error:', e);
+    console.error('Delete category error in Supabase:', e);
   }
+}
+
+export async function saveConfigToSupabase(userId: string, cfg: BudgetConfig) {
+  const supabase = getSupabase();
+  if (!supabase || !userId) return;
+  try {
+    await supabase.from('budget_config').upsert({
+      user_id: userId,
+      period_start: cfg.periodStart,
+      period_end: cfg.periodEnd,
+      income: cfg.income,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('Save config error in Supabase:', e);
+  }
+}
+
+export async function resetUserDataInSupabase(userId: string): Promise<{ cats: Category[]; spends: SpendEntry[]; cfg: BudgetConfig }> {
+  const supabase = getSupabase();
+  if (!supabase || !userId) throw new Error('Not connected');
+  // Delete all existing spends
+  await supabase.from('budget_spends').delete().eq('user_id', userId);
+  // Re-seed default categories
+  return await seedInitialUserData(userId);
 }

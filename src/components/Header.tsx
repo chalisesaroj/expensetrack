@@ -5,7 +5,7 @@ import { fmtD, money, verdict } from '../utils';
 import { TabType } from '../types';
 
 export const Header: React.FC = () => {
-  const { tab, setTab, cfg, calculations } = useBudget();
+  const { tab, setTab, cfg, calculations, user, signOut } = useBudget();
   const v = verdict(calculations.projSave);
 
   return (
@@ -17,11 +17,24 @@ export const Header: React.FC = () => {
             Budget year {fmtD(cfg.periodStart)} to {fmtD(cfg.periodEnd)} · {Math.round(calculations.frac * 100)}% elapsed
           </p>
         </div>
-        <div className="headfig">
-          <span className="label">Projected year-end</span>
-          <b className={`num ${v[1]}`}>
-            {v[0]} {money(Math.abs(calculations.projSave))}
-          </b>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <div className="headfig">
+            <span className="label">Projected year-end</span>
+            <b className={`num ${v[1]}`}>
+              {v[0]} {money(Math.abs(calculations.projSave))}
+            </b>
+          </div>
+          {user && (
+            <button
+              type="button"
+              className="btn small"
+              onClick={signOut}
+              title={`Signed in as ${user.email || user.id}`}
+              style={{ alignSelf: 'center' }}
+            >
+              Sign out
+            </button>
+          )}
         </div>
       </header>
       <nav className="tabs" role="tablist" aria-label="Sections">

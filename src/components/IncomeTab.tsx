@@ -2,7 +2,6 @@ import React, { useRef } from 'react';
 import { useBudget } from '../context/BudgetContext';
 import { SRC } from '../constants';
 import { money, num, today } from '../utils';
-import { SupabaseSyncSection } from './SupabaseSyncSection';
 
 interface IncomeCardProps {
   srcKey: string;
@@ -50,6 +49,8 @@ const IncomeCard: React.FC<IncomeCardProps> = ({ srcKey, title, salaryLabel }) =
 
 export const IncomeTab: React.FC = () => {
   const {
+    user,
+    signOut,
     cfg,
     calculations: c,
     updatePeriod,
@@ -156,21 +157,30 @@ export const IncomeTab: React.FC = () => {
         </div>
       </section>
 
-      <SupabaseSyncSection />
-
       <section className="card stack">
-        <h2>Your data</h2>
-        <p className="muted" style={{ fontSize: 13 }}>
-          Everything is stored in this browser on this device only. Download a backup now and then, and use it to move to another device or browser.
-        </p>
-        <div className="btnrow">
+        <div className="row-between">
+          <div>
+            <h2>Cloud Account & Data</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              All records are stored directly in your private Supabase cloud database.
+            </p>
+          </div>
+          {user && (
+            <div style={{ textAlign: 'right' }}>
+              <span className="label" style={{ display: 'block' }}>Signed in as</span>
+              <b style={{ fontSize: 14 }}>{user.email}</b>
+            </div>
+          )}
+        </div>
+
+        <div className="btnrow" style={{ marginTop: 8 }}>
           <button
             type="button"
             className="btn"
             id="backup"
             onClick={handleBackup}
           >
-            Download backup
+            Download JSON backup
           </button>
           <button
             type="button"
@@ -178,7 +188,7 @@ export const IncomeTab: React.FC = () => {
             id="restore-btn"
             onClick={handleRestoreClick}
           >
-            Restore from backup
+            Restore from JSON
           </button>
           <button
             type="button"
@@ -187,9 +197,18 @@ export const IncomeTab: React.FC = () => {
             onClick={handleResetClick}
           >
             {resetArmed
-              ? 'Confirm: erase all entries and reset budgets'
+              ? 'Confirm: erase all entries and reset budgets in cloud'
               : 'Reset to starting budgets'}
           </button>
+          {user && (
+            <button
+              type="button"
+              className="btn"
+              onClick={signOut}
+            >
+              Sign out
+            </button>
+          )}
         </div>
         <input
           type="file"
