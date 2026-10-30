@@ -1,0 +1,8 @@
+{
+  "name": "Budget Book",
+  "description": "Personal and household annual budget tracker and expense log.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

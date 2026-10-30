@@ -1,11 +1,36 @@
-<div align="center">
+# Budget Book
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+A personal and household annual budget tracker and expense ledger rewritten as a modern React SPA using TypeScript and Vite.
 
-  <h1>Built with AI Studio</h2>
+## Features
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+- **Overview Dashboard**:
+  - Live projected year-end savings calculation (surplus/deficit/break-even)
+  - Visual comparison bars comparing Annual Income, Total Budget, and Actual Spent
+  - Visual pace markers against elapsed year progress
+  - Remaining balances by category with color-coded warning/over-budget pills
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+- **Entries & Spending Tracker**:
+  - Quick spending entry form with instant remaining budget calculation preview
+  - Filterable transaction history with edit and double-click delete protection
+  - Custom date-range CSV report export compatible with Excel and Google Sheets
 
-</div>
+- **Budget Management**:
+  - Inline category renaming and annual budget adjustments
+  - Monthly budget breakdowns and remaining balances
+  - Add custom categories
+  - Safe category deletion (prevents accidental deletion of categories with active entries)
+
+- **Income & Settings**:
+  - Multi-source income tracking (Mine, Wife, Rent) with annual totals
+  - Customizable budget year dates
+  - Browser local persistence with automatic schema migrations
+  - JSON backup download and restore feature
+  - Reset to starting defaults
+
+## Tech Stack
+
+- **Framework**: React 18
+- **Language**: TypeScript
+- **Bundler**: Vite
+- **Styling**: Native CSS with light & dark theme mode support
