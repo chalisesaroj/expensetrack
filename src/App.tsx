@@ -7,6 +7,7 @@ import { BudgetTab } from './components/BudgetTab';
 import { IncomeTab } from './components/IncomeTab';
 import { Toast } from './components/Toast';
 import { AuthScreen } from './components/AuthScreen';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 export const AppContent: React.FC = () => {
   const { user, loadingAuth, loadingData, tab } = useBudget();
@@ -24,6 +25,7 @@ export const AppContent: React.FC = () => {
       <>
         <AuthScreen />
         <Toast />
+        <OfflineIndicator />
       </>
     );
   }
@@ -44,6 +46,7 @@ export const AppContent: React.FC = () => {
         </main>
       )}
       <Toast />
+      <OfflineIndicator />
     </div>
   );
 };

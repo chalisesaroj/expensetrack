@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Full-bleed background for maskable safe-zone -->
+  <rect width="512" height="512" fill="#0B5D57"/>
+
+  <!-- Centered safe-zone iconography -->
+  <g transform="translate(64, 64) scale(0.75)">
+    <!-- Ledger Cover Detail -->
+    <rect x="96" y="80" width="320" height="352" rx="28" fill="#FFFFFF"/>
+    <rect x="96" y="80" width="48" height="352" rx="28" fill="#14231F" opacity="0.08"/>
+    <line x1="144" y1="80" x2="144" y2="432" stroke="#CBD6D3" stroke-width="3"/>
+
+    <!-- Chart / Budget Bars inside the Book -->
+    <rect x="180" y="140" width="180" height="18" rx="9" fill="#0B5D57"/>
+    <rect x="180" y="180" width="130" height="18" rx="9" fill="#1B7A43"/>
+    <rect x="180" y="220" width="155" height="18" rx="9" fill="#F0B35A"/>
+    
+    <!-- Currency / Ledger Symbol -->
+    <circle cx="270" cy="320" r="54" fill="#0B5D57"/>
+    <text x="270" y="336" font-family="'IBM Plex Sans', sans-serif" font-weight="700" font-size="44" fill="#FFFFFF" text-anchor="middle">Rs</text>
+  </g>
+</svg>

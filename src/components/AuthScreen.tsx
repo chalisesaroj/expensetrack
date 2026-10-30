@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { getSupabase } from '../lib/supabase';
 import { useBudget } from '../context/BudgetContext';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export const AuthScreen: React.FC = () => {
   const { showToast } = useBudget();
@@ -70,13 +71,14 @@ export const AuthScreen: React.FC = () => {
 
   return (
     <div id="app" style={{ minHeight: '80vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-      <header className="top" style={{ textAlign: 'center', justifyContent: 'center', marginBottom: 20 }}>
+      <header className="top" style={{ textAlign: 'center', justifyContent: 'center', marginBottom: 20, flexDirection: 'column', alignItems: 'center', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 32 }}>Budget Book</h1>
           <p className="sub" style={{ fontSize: 15, marginTop: 6 }}>
             Sign in to access your personal cloud ledger.
           </p>
         </div>
+        <PWAInstallButton />
       </header>
 
       <div className="card stack" style={{ maxWidth: 440, margin: '0 auto', width: '100%' }}>

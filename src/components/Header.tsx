@@ -3,6 +3,7 @@ import { useBudget } from '../context/BudgetContext';
 import { TABS } from '../constants';
 import { fmtD, money, verdict } from '../utils';
 import { TabType } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export const Header: React.FC = () => {
   const { tab, setTab, cfg, calculations, user, signOut } = useBudget();
@@ -17,20 +18,20 @@ export const Header: React.FC = () => {
             Budget year {fmtD(cfg.periodStart)} to {fmtD(cfg.periodEnd)} · {Math.round(calculations.frac * 100)}% elapsed
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <div className="headfig">
             <span className="label">Projected year-end</span>
             <b className={`num ${v[1]}`}>
               {v[0]} {money(Math.abs(calculations.projSave))}
             </b>
           </div>
+          <PWAInstallButton />
           {user && (
             <button
               type="button"
               className="btn small"
               onClick={signOut}
               title={`Signed in as ${user.email || user.id}`}
-              style={{ alignSelf: 'center' }}
             >
               Sign out
             </button>
