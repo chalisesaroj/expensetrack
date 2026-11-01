@@ -1,11 +1,23 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { BudgetConfig, Category, Calculations, SpendEntry, SpendFormState, TabType } from '../types';
+import {
+  BudgetConfig,
+  Category,
+  Calculations,
+  SpendEntry,
+  SpendFormState,
+  IncomeEntry,
+  IncomeFormState,
+  TabType,
+} from '../types';
 import { calc, defCats, defCfg, num, today, uid } from '../utils';
+import { DEFAULT_MEMBERS, DEFAULT_INCOME_SOURCES } from '../constants';
 import {
   getSupabase,
   fetchRemoteBudgetData,
   saveSpendToSupabase,
   deleteSpendFromSupabase,
+  saveIncomeToSupabase,
+  deleteIncomeFromSupabase,
   saveCategoryToSupabase,
   deleteCategoryFromSupabase,
   saveConfigToSupabase,
@@ -28,6 +40,7 @@ interface BudgetContextType {
   setTab: (t: TabType) => void;
   cats: Category[];
   spends: SpendEntry[];
+  incomes: IncomeEntry[];
   cfg: BudgetConfig;
   calculations: Calculations;
   form: SpendFormState;
@@ -35,21 +48,28 @@ interface BudgetContextType {
   updateFormField: (field: keyof SpendFormState, value: string) => void;
   resetForm: () => void;
   startEditSpend: (id: string) => void;
+  incomeForm: IncomeFormState;
+  setIncomeForm: React.Dispatch<React.SetStateAction<IncomeFormState>>;
+  updateIncomeFormField: (field: keyof IncomeFormState, value: string) => void;
+  resetIncomeForm: () => void;
+  startEditIncome: (id: string) => void;
+  saveIncome: (source: string, member: string, amountStr: string, dateStr: string, noteStr: string) => boolean;
+  deleteIncome: (id: string) => void;
   armed: string | null;
   setArmed: (val: string | null) => void;
   toastMessage: string | null;
   showToast: (msg: string) => void;
   exp: ExportState;
   setExp: React.Dispatch<React.SetStateAction<ExportState>>;
-  saveSpend: (catId: string, amountStr: string, dateStr: string, noteStr: string) => boolean;
+  saveSpend: (catId: string, amountStr: string, dateStr: string, noteStr: string, memberStr?: string) => boolean;
   deleteSpend: (id: string) => void;
   addCategory: (name: string, budget: number) => boolean;
   updateCategoryName: (id: string, name: string) => boolean;
   updateCategoryBudget: (id: string, budget: number) => void;
   deleteCategory: (id: string) => boolean;
-  updateIncome: (src: string, fld: 'salary' | 'other', val: number) => void;
+  updateMembers: (newMembers: string[]) => void;
   updatePeriod: (field: 'periodStart' | 'periodEnd', val: string) => boolean;
-  restoreData: (data: { cfg?: BudgetConfig; cats: Category[]; spends: SpendEntry[] }) => boolean;
+  restoreData: (data: { cfg?: BudgetConfig; cats: Category[]; spends: SpendEntry[]; incomes?: IncomeEntry[] }) => boolean;
   resetToStartingBudgets: () => Promise<void>;
   getDownloadBackupBlob: () => Blob;
 }
@@ -72,13 +92,28 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [armed, setArmed] = useState<string | null>(null);
 
-  // Data states (cloud-only, zero localStorage)
+  // Cloud-only data states
   const [cats, setCats] = useState<Category[]>([]);
   const [spends, setSpends] = useState<SpendEntry[]>([]);
+  const [incomes, setIncomes] = useState<IncomeEntry[]>([]);
   const [cfg, setCfg] = useState<BudgetConfig>(defCfg());
+
+  const members = useMemo(() => {
+    return cfg.members && cfg.members.length > 0 ? cfg.members : DEFAULT_MEMBERS;
+  }, [cfg.members]);
 
   const [form, setForm] = useState<SpendFormState>({
     cat: '',
+    amount: '',
+    date: today(),
+    note: '',
+    member: DEFAULT_MEMBERS[0] || 'Saroj',
+    edit: null,
+  });
+
+  const [incomeForm, setIncomeForm] = useState<IncomeFormState>({
+    source: DEFAULT_INCOME_SOURCES[0] || 'Salary',
+    member: DEFAULT_MEMBERS[0] || 'Saroj',
     amount: '',
     date: today(),
     note: '',
@@ -133,6 +168,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     if (!user) {
       setCats([]);
       setSpends([]);
+      setIncomes([]);
       setCfg(defCfg());
       return;
     }
@@ -146,9 +182,20 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         if (data) {
           setCats(data.cats);
           setSpends(data.spends);
+          setIncomes(data.incomes || []);
           setCfg(data.cfg);
           if (data.cats.length > 0) {
-            setForm((f) => ({ ...f, cat: data.cats[0].id }));
+            setForm((f) => ({
+              ...f,
+              cat: data.cats[0].id,
+              member: (data.cfg.members && data.cfg.members[0]) || f.member,
+            }));
+          }
+          if (data.cfg.members && data.cfg.members.length > 0) {
+            setIncomeForm((inf) => ({
+              ...inf,
+              member: data.cfg.members[0],
+            }));
           }
         }
       })
@@ -173,228 +220,386 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setUser(null);
     setCats([]);
     setSpends([]);
+    setIncomes([]);
     setCfg(defCfg());
     showToast('Signed out successfully');
   }, [showToast]);
 
-  // Derived calculations
+  // Derived calculations (incorporating collective family incomes & expenses)
   const calculations = useMemo(() => {
-    return calc(cfg, cats, spends);
-  }, [cfg, cats, spends]);
+    return calc(cfg, cats, spends, incomes);
+  }, [cfg, cats, spends, incomes]);
 
+  // Spend form handlers
   const updateFormField = useCallback((field: keyof SpendFormState, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
   }, []);
 
   const resetForm = useCallback(() => {
     setForm((prev) => ({
-      cat: prev.cat,
+      cat: prev.cat || (cats[0]?.id || ''),
+      amount: '',
+      date: today(),
+      note: '',
+      member: members[0] || 'Saroj',
+      edit: null,
+    }));
+  }, [cats, members]);
+
+  const startEditSpend = useCallback(
+    (id: string) => {
+      const e = spends.find((x) => x.id === id);
+      if (!e) return;
+      setForm({
+        cat: e.cat,
+        amount: String(num(e.amount)),
+        date: e.date || today(),
+        note: e.note || '',
+        member: e.member || members[0] || 'Saroj',
+        edit: id,
+      });
+      setArmed(null);
+      setTimeout(() => {
+        const fc = document.getElementById('spend-form');
+        if (fc) fc.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+    },
+    [spends, members]
+  );
+
+  const saveSpend = useCallback(
+    (catId: string, amountStr: string, dateStr: string, noteStr: string, memberStr?: string): boolean => {
+      if (!user) {
+        showToast('You must be signed in.');
+        return false;
+      }
+      const amt = num(amountStr);
+      if (!catId || amt <= 0) {
+        showToast('Choose a category and enter an amount above zero.');
+        return false;
+      }
+      if (!dateStr) {
+        showToast('Pick a date.');
+        return false;
+      }
+      const cat = cats.find((x) => x.id === catId);
+      if (!cat) return false;
+
+      const chosenMember = memberStr || form.member || members[0] || 'Shared';
+
+      let prior = calculations.by[catId] || 0;
+      if (form.edit) {
+        const o = spends.find((e) => e.id === form.edit);
+        if (o && o.cat === catId) prior -= num(o.amount);
+      }
+      const left = num(cat.budget) - prior - amt;
+
+      const spendItem: SpendEntry = {
+        id: form.edit || uid('s'),
+        cat: catId,
+        amount: amt,
+        date: dateStr,
+        note: noteStr.trim(),
+        member: chosenMember,
+        created: Date.now(),
+      };
+
+      if (form.edit) {
+        setSpends((prev) => prev.map((e) => (e.id === form.edit ? spendItem : e)));
+      } else {
+        setSpends((prev) => [...prev, spendItem]);
+      }
+
+      // Direct write to Supabase
+      saveSpendToSupabase(user.id, spendItem);
+
+      setForm({
+        cat: catId,
+        amount: '',
+        date: dateStr,
+        note: '',
+        member: chosenMember,
+        edit: null,
+      });
+
+      const nf = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+      const formattedLeft = (left < 0 ? '−' : '') + 'Rs ' + nf.format(Math.abs(Math.round(left)));
+      showToast(`Saved by ${chosenMember}. ${cat.name} has ${formattedLeft} left.`);
+      return true;
+    },
+    [user, cats, calculations.by, form.edit, form.member, spends, members, showToast]
+  );
+
+  const deleteSpend = useCallback(
+    (id: string) => {
+      if (!user) return;
+      setSpends((prev) => prev.filter((x) => x.id !== id));
+      setArmed(null);
+      deleteSpendFromSupabase(user.id, id);
+      showToast('Expense entry deleted');
+    },
+    [user, showToast]
+  );
+
+  // Income form handlers
+  const updateIncomeFormField = useCallback((field: keyof IncomeFormState, value: string) => {
+    setIncomeForm((prev) => ({ ...prev, [field]: value }));
+  }, []);
+
+  const resetIncomeForm = useCallback(() => {
+    setIncomeForm((prev) => ({
+      source: prev.source || DEFAULT_INCOME_SOURCES[0],
+      member: prev.member || members[0] || 'Saroj',
       amount: '',
       date: today(),
       note: '',
       edit: null,
     }));
-  }, []);
+  }, [members]);
 
-  const startEditSpend = useCallback((id: string) => {
-    const e = spends.find((x) => x.id === id);
-    if (!e) return;
-    setForm({
-      cat: e.cat,
-      amount: String(num(e.amount)),
-      date: e.date || today(),
-      note: e.note || '',
-      edit: id,
-    });
-    setArmed(null);
-    setTimeout(() => {
-      const fc = document.getElementById('spend-form');
-      if (fc) fc.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 50);
-  }, [spends]);
+  const startEditIncome = useCallback(
+    (id: string) => {
+      const inc = incomes.find((x) => x.id === id);
+      if (!inc) return;
+      setIncomeForm({
+        source: inc.source,
+        member: inc.member || members[0] || 'Saroj',
+        amount: String(num(inc.amount)),
+        date: inc.date || today(),
+        note: inc.note || '',
+        edit: id,
+      });
+      setArmed(null);
+      setTimeout(() => {
+        const f = document.getElementById('income-form');
+        if (f) f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+    },
+    [incomes, members]
+  );
 
-  const saveSpend = useCallback((catId: string, amountStr: string, dateStr: string, noteStr: string): boolean => {
-    if (!user) {
-      showToast('You must be signed in.');
-      return false;
-    }
-    const amt = num(amountStr);
-    if (!catId || amt <= 0) {
-      showToast('Choose a category and enter an amount above zero.');
-      return false;
-    }
-    if (!dateStr) {
-      showToast('Pick a date.');
-      return false;
-    }
-    const cat = cats.find((x) => x.id === catId);
-    if (!cat) return false;
+  const saveIncome = useCallback(
+    (source: string, member: string, amountStr: string, dateStr: string, noteStr: string): boolean => {
+      if (!user) {
+        showToast('You must be signed in.');
+        return false;
+      }
+      const amt = num(amountStr);
+      if (!source.trim() || amt <= 0) {
+        showToast('Select an income source and enter an amount above zero.');
+        return false;
+      }
+      if (!dateStr) {
+        showToast('Pick an income date.');
+        return false;
+      }
+      const chosenMember = member || members[0] || 'Saroj';
 
-    let prior = calculations.by[catId] || 0;
-    if (form.edit) {
-      const o = spends.find((e) => e.id === form.edit);
-      if (o && o.cat === catId) prior -= num(o.amount);
-    }
-    const left = num(cat.budget) - prior - amt;
-
-    const spendItem: SpendEntry = {
-      id: form.edit || uid('s'),
-      cat: catId,
-      amount: amt,
-      date: dateStr,
-      note: noteStr.trim(),
-      created: Date.now(),
-    };
-
-    if (form.edit) {
-      setSpends((prev) =>
-        prev.map((e) => (e.id === form.edit ? spendItem : e))
-      );
-    } else {
-      setSpends((prev) => [...prev, spendItem]);
-    }
-
-    // Direct write to Supabase
-    saveSpendToSupabase(user.id, spendItem);
-
-    setForm({
-      cat: catId,
-      amount: '',
-      date: dateStr,
-      note: '',
-      edit: null,
-    });
-
-    const nf = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
-    const formattedLeft = (left < 0 ? '−' : '') + 'Rs ' + nf.format(Math.abs(left));
-    showToast(`Saved. ${cat.name} has ${formattedLeft} left${left < 0 ? ' (over budget).' : '.'}`);
-    return true;
-  }, [user, cats, calculations.by, form.edit, spends, showToast]);
-
-  const deleteSpend = useCallback((id: string) => {
-    if (!user) return;
-    setSpends((prev) => prev.filter((x) => x.id !== id));
-    setArmed(null);
-    deleteSpendFromSupabase(user.id, id);
-    showToast('Entry deleted');
-  }, [user, showToast]);
-
-  const addCategory = useCallback((name: string, budget: number): boolean => {
-    if (!user) return false;
-    const trimmed = name.trim();
-    if (!trimmed) {
-      showToast('Give the category a name.');
-      return false;
-    }
-    const maxOrder = cats.reduce((m, k) => Math.max(m, k.order || 0), 0);
-    const newCat: Category = { id: uid('c'), name: trimmed, budget: num(budget), order: maxOrder + 1 };
-    setCats((prev) => [...prev, newCat]);
-    saveCategoryToSupabase(user.id, newCat);
-    showToast('Category added');
-    return true;
-  }, [user, cats, showToast]);
-
-  const updateCategoryName = useCallback((id: string, name: string): boolean => {
-    if (!user) return false;
-    const trimmed = name.trim();
-    if (!trimmed) {
-      showToast('A category needs a name.');
-      return false;
-    }
-    setCats((prev) => prev.map((c) => (c.id === id ? { ...c, name: trimmed } : c)));
-    const existing = cats.find((c) => c.id === id);
-    if (existing) {
-      saveCategoryToSupabase(user.id, { ...existing, name: trimmed });
-    }
-    return true;
-  }, [user, cats, showToast]);
-
-  const updateCategoryBudget = useCallback((id: string, budget: number) => {
-    if (!user) return;
-    setCats((prev) => prev.map((c) => (c.id === id ? { ...c, budget: num(budget) } : c)));
-    const existing = cats.find((c) => c.id === id);
-    if (existing) {
-      saveCategoryToSupabase(user.id, { ...existing, budget: num(budget) });
-    }
-    showToast('Budget updated');
-  }, [user, cats, showToast]);
-
-  const deleteCategory = useCallback((id: string): boolean => {
-    if (!user) return false;
-    setCats((prev) => prev.filter((x) => x.id !== id));
-    setArmed(null);
-    deleteCategoryFromSupabase(user.id, id);
-    showToast('Category deleted');
-    return true;
-  }, [user, showToast]);
-
-  const updateIncome = useCallback((src: string, fld: 'salary' | 'other', val: number) => {
-    if (!user) return;
-    setCfg((prev) => {
-      const srcObj = prev.income[src] || { salary: 0, other: 0 };
-      const updated = {
-        ...prev,
-        income: {
-          ...prev.income,
-          [src]: {
-            ...srcObj,
-            [fld]: num(val),
-          },
-        },
+      const incomeItem: IncomeEntry = {
+        id: incomeForm.edit || uid('inc'),
+        source: source.trim(),
+        member: chosenMember,
+        amount: amt,
+        date: dateStr,
+        note: noteStr.trim(),
+        created: Date.now(),
       };
-      saveConfigToSupabase(user.id, updated);
-      return updated;
-    });
-    showToast('Income updated');
-  }, [user, showToast]);
 
-  const updatePeriod = useCallback((field: 'periodStart' | 'periodEnd', val: string): boolean => {
-    if (!user) return false;
-    const s = field === 'periodStart' ? val : cfg.periodStart;
-    const e = field === 'periodEnd' ? val : cfg.periodEnd;
-    const parse = (str: string) => {
-      const p = str.split('-');
-      return new Date(+p[0], +p[1] - 1, +p[2]).getTime();
-    };
+      if (incomeForm.edit) {
+        setIncomes((prev) => prev.map((item) => (item.id === incomeForm.edit ? incomeItem : item)));
+      } else {
+        setIncomes((prev) => [...prev, incomeItem]);
+      }
 
-    if (!val || parse(e) < parse(s)) {
-      showToast('Choose an end date after the start date.');
-      return false;
-    }
+      saveIncomeToSupabase(user.id, incomeItem);
 
-    setCfg((prev) => {
-      const updated = { ...prev, [field]: val };
-      saveConfigToSupabase(user.id, updated);
-      return updated;
-    });
-    showToast('Budget year updated');
-    return true;
-  }, [user, cfg.periodStart, cfg.periodEnd, showToast]);
+      setIncomeForm({
+        source,
+        member: chosenMember,
+        amount: '',
+        date: dateStr,
+        note: '',
+        edit: null,
+      });
 
-  const restoreData = useCallback((data: { cfg?: BudgetConfig; cats: Category[]; spends: SpendEntry[] }): boolean => {
-    if (!user) return false;
-    if (!data || !Array.isArray(data.cats) || !Array.isArray(data.spends)) {
-      showToast('That file is not a Budget Book backup.');
-      return false;
-    }
-    const d = defCfg();
-    const mergedCfg = { ...d, ...(data.cfg || {}) };
-    mergedCfg.income = { ...d.income, ...(data.cfg?.income || {}) };
+      const nf = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+      showToast(`Income of Rs ${nf.format(amt)} recorded for ${chosenMember} (${source}).`);
+      return true;
+    },
+    [user, incomeForm.edit, members, showToast]
+  );
 
-    setCats(data.cats);
-    setSpends(data.spends);
-    setCfg(mergedCfg);
-    setForm({ cat: data.cats[0]?.id || '', amount: '', date: today(), note: '', edit: null });
-    setArmed(null);
+  const deleteIncome = useCallback(
+    (id: string) => {
+      if (!user) return;
+      setIncomes((prev) => prev.filter((x) => x.id !== id));
+      setArmed(null);
+      deleteIncomeFromSupabase(user.id, id);
+      showToast('Income entry deleted');
+    },
+    [user, showToast]
+  );
 
-    // Save to Supabase
-    saveConfigToSupabase(user.id, mergedCfg);
-    data.cats.forEach((c) => saveCategoryToSupabase(user.id, c));
-    data.spends.forEach((s) => saveSpendToSupabase(user.id, s));
+  // Category management
+  const addCategory = useCallback(
+    (name: string, budget: number): boolean => {
+      if (!user) return false;
+      const trimmed = name.trim();
+      if (!trimmed) {
+        showToast('Give the category a name.');
+        return false;
+      }
+      const maxOrder = cats.reduce((m, k) => Math.max(m, k.order || 0), 0);
+      const newCat: Category = { id: uid('c'), name: trimmed, budget: num(budget), order: maxOrder + 1 };
+      setCats((prev) => [...prev, newCat]);
+      saveCategoryToSupabase(user.id, newCat);
+      showToast('Category added');
+      return true;
+    },
+    [user, cats, showToast]
+  );
 
-    showToast('Backup restored and saved to Supabase');
-    return true;
-  }, [user, showToast]);
+  const updateCategoryName = useCallback(
+    (id: string, name: string): boolean => {
+      if (!user) return false;
+      const trimmed = name.trim();
+      if (!trimmed) {
+        showToast('A category needs a name.');
+        return false;
+      }
+      setCats((prev) => prev.map((c) => (c.id === id ? { ...c, name: trimmed } : c)));
+      const existing = cats.find((c) => c.id === id);
+      if (existing) {
+        saveCategoryToSupabase(user.id, { ...existing, name: trimmed });
+      }
+      return true;
+    },
+    [user, cats, showToast]
+  );
+
+  const updateCategoryBudget = useCallback(
+    (id: string, budget: number) => {
+      if (!user) return;
+      setCats((prev) => prev.map((c) => (c.id === id ? { ...c, budget: num(budget) } : c)));
+      const existing = cats.find((c) => c.id === id);
+      if (existing) {
+        saveCategoryToSupabase(user.id, { ...existing, budget: num(budget) });
+      }
+      showToast('Budget updated');
+    },
+    [user, cats, showToast]
+  );
+
+  const deleteCategory = useCallback(
+    (id: string): boolean => {
+      if (!user) return false;
+      setCats((prev) => prev.filter((x) => x.id !== id));
+      setArmed(null);
+      deleteCategoryFromSupabase(user.id, id);
+      showToast('Category deleted');
+      return true;
+    },
+    [user, showToast]
+  );
+
+  // Family Members Management
+  const updateMembers = useCallback(
+    (newMembers: string[]) => {
+      if (!user) return;
+      const clean = newMembers.map((m) => m.trim()).filter(Boolean);
+      if (clean.length === 0) {
+        showToast('You must have at least one family member.');
+        return;
+      }
+      setCfg((prev) => {
+        const updated = { ...prev, members: clean };
+        saveConfigToSupabase(user.id, updated);
+        return updated;
+      });
+      showToast('Family members updated');
+    },
+    [user, showToast]
+  );
+
+  const updatePeriod = useCallback(
+    (field: 'periodStart' | 'periodEnd', val: string): boolean => {
+      if (!user) return false;
+      const s = field === 'periodStart' ? val : cfg.periodStart;
+      const e = field === 'periodEnd' ? val : cfg.periodEnd;
+      const parse = (str: string) => {
+        const p = str.split('-');
+        return new Date(+p[0], +p[1] - 1, +p[2]).getTime();
+      };
+
+      if (!val || parse(e) < parse(s)) {
+        showToast('Choose an end date after the start date.');
+        return false;
+      }
+
+      setCfg((prev) => {
+        const updated = { ...prev, [field]: val };
+        saveConfigToSupabase(user.id, updated);
+        return updated;
+      });
+      showToast('Budget year updated');
+      return true;
+    },
+    [user, cfg.periodStart, cfg.periodEnd, showToast]
+  );
+
+  const restoreData = useCallback(
+    (data: { cfg?: BudgetConfig; cats: Category[]; spends: SpendEntry[]; incomes?: IncomeEntry[] }): boolean => {
+      if (!user) return false;
+      if (!data || !Array.isArray(data.cats) || !Array.isArray(data.spends)) {
+        showToast('That file is not a Budget Book backup.');
+        return false;
+      }
+      const d = defCfg();
+      const mergedCfg: BudgetConfig = {
+        periodStart: data.cfg?.periodStart || d.periodStart,
+        periodEnd: data.cfg?.periodEnd || d.periodEnd,
+        members:
+          Array.isArray(data.cfg?.members) && data.cfg.members.length > 0
+            ? data.cfg.members
+            : d.members,
+        income: { ...d.income, ...(data.cfg?.income || {}) },
+      };
+
+      const restoredIncomes = Array.isArray(data.incomes) ? data.incomes : [];
+
+      setCats(data.cats);
+      setSpends(data.spends);
+      setIncomes(restoredIncomes);
+      setCfg(mergedCfg);
+      setForm({
+        cat: data.cats[0]?.id || '',
+        amount: '',
+        date: today(),
+        note: '',
+        member: mergedCfg.members[0] || 'Saroj',
+        edit: null,
+      });
+      setIncomeForm({
+        source: DEFAULT_INCOME_SOURCES[0],
+        member: mergedCfg.members[0] || 'Saroj',
+        amount: '',
+        date: today(),
+        note: '',
+        edit: null,
+      });
+      setArmed(null);
+
+      // Save to Supabase
+      saveConfigToSupabase(user.id, mergedCfg);
+      data.cats.forEach((c) => saveCategoryToSupabase(user.id, c));
+      data.spends.forEach((s) => saveSpendToSupabase(user.id, s));
+      restoredIncomes.forEach((inc) => saveIncomeToSupabase(user.id, inc));
+
+      showToast('Backup restored and saved to Supabase');
+      return true;
+    },
+    [user, showToast]
+  );
 
   const resetToStartingBudgets = useCallback(async () => {
     if (!user) return;
@@ -402,19 +607,35 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const fresh = await resetUserDataInSupabase(user.id);
       setCats(fresh.cats);
       setSpends(fresh.spends);
-      setForm({ cat: fresh.cats[0]?.id || '', amount: '', date: today(), note: '', edit: null });
+      setIncomes(fresh.incomes);
+      setForm({
+        cat: fresh.cats[0]?.id || '',
+        amount: '',
+        date: today(),
+        note: '',
+        member: fresh.cfg.members[0] || 'Saroj',
+        edit: null,
+      });
+      setIncomeForm({
+        source: DEFAULT_INCOME_SOURCES[0],
+        member: fresh.cfg.members[0] || 'Saroj',
+        amount: '',
+        date: today(),
+        note: '',
+        edit: null,
+      });
       setArmed(null);
-      showToast('Budgets reset in Supabase. Income was kept.');
+      showToast('Budgets and records reset in Supabase.');
     } catch {
-      showToast('Failed to reset budgets in Supabase.');
+      showToast('Failed to reset data in Supabase.');
     }
   }, [user, showToast]);
 
   const getDownloadBackupBlob = useCallback((): Blob => {
-    return new Blob([JSON.stringify({ cfg, cats, spends }, null, 2)], {
+    return new Blob([JSON.stringify({ cfg, cats, spends, incomes }, null, 2)], {
       type: 'application/json',
     });
-  }, [cfg, cats, spends]);
+  }, [cfg, cats, spends, incomes]);
 
   return (
     <BudgetContext.Provider
@@ -427,6 +648,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setTab,
         cats,
         spends,
+        incomes,
         cfg,
         calculations,
         form,
@@ -434,6 +656,13 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateFormField,
         resetForm,
         startEditSpend,
+        incomeForm,
+        setIncomeForm,
+        updateIncomeFormField,
+        resetIncomeForm,
+        startEditIncome,
+        saveIncome,
+        deleteIncome,
         armed,
         setArmed,
         toastMessage,
@@ -446,7 +675,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         updateCategoryName,
         updateCategoryBudget,
         deleteCategory,
-        updateIncome,
+        updateMembers,
         updatePeriod,
         restoreData,
         resetToStartingBudgets,

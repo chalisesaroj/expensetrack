@@ -3,18 +3,23 @@ import { useBudget } from '../context/BudgetContext';
 import { SpendForm } from './SpendForm';
 import { ReportCard } from './ReportCard';
 import { fmtD, money, num } from '../utils';
+import { DEFAULT_MEMBERS } from '../constants';
 
 export const EntriesTab: React.FC = () => {
   const {
     spends,
     cats,
+    cfg,
     armed,
     setArmed,
     startEditSpend,
     deleteSpend,
   } = useBudget();
 
-  const [filter, setFilter] = useState<string>('all');
+  const members = cfg.members && cfg.members.length > 0 ? cfg.members : DEFAULT_MEMBERS;
+
+  const [filterCat, setFilterCat] = useState<string>('all');
+  const [filterMember, setFilterMember] = useState<string>('all');
 
   const namesMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -26,10 +31,16 @@ export const EntriesTab: React.FC = () => {
 
   const filteredList = useMemo(() => {
     return spends
-      .filter((e) => filter === 'all' || e.cat === filter)
+      .filter((e) => {
+        const matchCat = filterCat === 'all' || e.cat === filterCat;
+        const matchMember =
+          filterMember === 'all' ||
+          (e.member || 'Shared') === filterMember;
+        return matchCat && matchMember;
+      })
       .slice()
       .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created || 0) - (a.created || 0));
-  }, [spends, filter]);
+  }, [spends, filterCat, filterMember]);
 
   const total = useMemo(() => {
     return filteredList.reduce((t, e) => t + num(e.amount), 0);
@@ -51,25 +62,53 @@ export const EntriesTab: React.FC = () => {
 
       <section className="card stack">
         <div className="row-between">
-          <h2>All entries</h2>
-          <label className="f" htmlFor="flt" style={{ minWidth: 200 }}>
-            Show
-            <select
-              id="flt"
-              value={filter}
-              onChange={(e) => {
-                setFilter(e.target.value);
-                setArmed(null);
-              }}
-            >
-              <option value="all">All categories</option>
-              {cats.map((k) => (
-                <option key={k.id} value={k.id}>
-                  {k.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div>
+            <h2>All spending entries</h2>
+            <span className="muted" style={{ fontSize: 13 }}>
+              Filter by category or by family member.
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <label className="f" htmlFor="flt-cat" style={{ minWidth: 160 }}>
+              Category
+              <select
+                id="flt-cat"
+                value={filterCat}
+                onChange={(e) => {
+                  setFilterCat(e.target.value);
+                  setArmed(null);
+                }}
+              >
+                <option value="all">All categories</option>
+                {cats.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="f" htmlFor="flt-member" style={{ minWidth: 160 }}>
+              Spent by
+              <select
+                id="flt-member"
+                value={filterMember}
+                onChange={(e) => {
+                  setFilterMember(e.target.value);
+                  setArmed(null);
+                }}
+              >
+                <option value="all">All family members</option>
+                {members.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+                <option value="Shared">Shared / Family</option>
+              </select>
+            </label>
+          </div>
         </div>
 
         {filteredList.length > 0 ? (
@@ -79,6 +118,7 @@ export const EntriesTab: React.FC = () => {
                 <tr>
                   <th>Date</th>
                   <th>Category</th>
+                  <th>Spent by</th>
                   <th>Note</th>
                   <th className="r">Amount</th>
                   <th></th>
@@ -87,10 +127,22 @@ export const EntriesTab: React.FC = () => {
               <tbody>
                 {filteredList.map((e) => {
                   const isArmed = armed === 's:' + e.id;
+                  const person = e.member || 'Shared';
                   return (
                     <tr key={e.id}>
                       <td className="num">{e.date ? fmtD(e.date) : ''}</td>
                       <td>{namesMap[e.cat] || 'Removed category'}</td>
+                      <td>
+                        <span
+                          className="pill"
+                          style={{
+                            background: person === 'Shared' ? 'var(--surface-2)' : 'var(--good-bg)',
+                            color: person === 'Shared' ? 'var(--muted)' : 'var(--good)',
+                          }}
+                        >
+                          {person}
+                        </span>
+                      </td>
                       <td>{e.note || ''}</td>
                       <td className="r num">{money(num(e.amount))}</td>
                       <td>
@@ -98,7 +150,6 @@ export const EntriesTab: React.FC = () => {
                           <button
                             type="button"
                             className="btn small"
-                            id={`ed-${e.id}`}
                             onClick={() => startEditSpend(e.id)}
                           >
                             Edit
@@ -106,10 +157,9 @@ export const EntriesTab: React.FC = () => {
                           <button
                             type="button"
                             className={`btn small danger${isArmed ? ' armed' : ''}`}
-                            id={`del-${e.id}`}
                             onClick={() => handleDeleteClick(e.id)}
                           >
-                            {isArmed ? 'Confirm delete' : 'Delete'}
+                            {isArmed ? 'Confirm' : 'Delete'}
                           </button>
                         </div>
                       </td>
@@ -119,9 +169,7 @@ export const EntriesTab: React.FC = () => {
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={3}>
-                    {filteredList.length} entr{filteredList.length === 1 ? 'y' : 'ies'}
-                  </td>
+                  <td colSpan={4}>Total ({filteredList.length} entries)</td>
                   <td className="r num">{money(total)}</td>
                   <td></td>
                 </tr>
@@ -129,7 +177,7 @@ export const EntriesTab: React.FC = () => {
             </table>
           </div>
         ) : (
-          <p className="empty">No entries yet. Record your first spending above.</p>
+          <p className="muted empty">No entries match the selected filter.</p>
         )}
       </section>
     </>

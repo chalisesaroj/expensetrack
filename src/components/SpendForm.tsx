@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { useBudget } from '../context/BudgetContext';
 import { money, num } from '../utils';
+import { DEFAULT_MEMBERS } from '../constants';
 
 export const SpendForm: React.FC = () => {
   const {
@@ -13,7 +14,10 @@ export const SpendForm: React.FC = () => {
     saveSpend,
     setTab,
     calculations,
+    cfg,
   } = useBudget();
+
+  const members = cfg.members && cfg.members.length > 0 ? cfg.members : DEFAULT_MEMBERS;
 
   // Ensure selected category is valid
   useEffect(() => {
@@ -55,7 +59,13 @@ export const SpendForm: React.FC = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    saveSpend(form.cat || (cats[0] ? cats[0].id : ''), form.amount, form.date, form.note);
+    saveSpend(
+      form.cat || (cats[0] ? cats[0].id : ''),
+      form.amount,
+      form.date,
+      form.note,
+      form.member || members[0] || 'Shared'
+    );
   };
 
   return (
@@ -90,6 +100,22 @@ export const SpendForm: React.FC = () => {
           </select>
         </label>
 
+        <label className="f" htmlFor="f-member">
+          Spent by
+          <select
+            id="f-member"
+            value={form.member || members[0] || 'Shared'}
+            onChange={(e) => updateFormField('member', e.target.value)}
+          >
+            {members.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            <option value="Shared">Shared / Family</option>
+          </select>
+        </label>
+
         <label className="f" htmlFor="f-amt">
           Amount (Rs)
           <input
@@ -119,7 +145,7 @@ export const SpendForm: React.FC = () => {
             id="f-note"
             autoComplete="off"
             maxLength={120}
-            placeholder="e.g. vegetables, school fee"
+            placeholder="e.g. vegetables, fuel, flight"
             value={form.note}
             onChange={(e) => updateFormField('note', e.target.value)}
           />
@@ -143,6 +169,11 @@ export const SpendForm: React.FC = () => {
                 </b>{' '}
                 after this entry
               </>
+            )}
+            {form.member && (
+              <span className="muted" style={{ marginLeft: 8 }}>
+                (Payer: <b>{form.member}</b>)
+              </span>
             )}
           </>
         )}

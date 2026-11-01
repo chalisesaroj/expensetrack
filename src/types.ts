@@ -1,3 +1,24 @@
+export type IncomeSourceType = 'Salary' | 'Consulting' | 'Travel Order' | 'Miscellaneous' | string;
+
+export interface IncomeEntry {
+  id: string;
+  source: IncomeSourceType;
+  member: string;
+  amount: number;
+  date: string;
+  note: string;
+  created?: number;
+}
+
+export interface IncomeFormState {
+  source: string;
+  member: string;
+  amount: string;
+  date: string;
+  note: string;
+  edit: string | null;
+}
+
 export interface IncomeSourceConfig {
   salary: number;
   other: number;
@@ -6,11 +27,12 @@ export interface IncomeSourceConfig {
 export interface BudgetConfig {
   periodStart: string;
   periodEnd: string;
-  income: {
-    me: IncomeSourceConfig;
-    wife: IncomeSourceConfig;
-    rent: IncomeSourceConfig;
-    [key: string]: IncomeSourceConfig;
+  members: string[];
+  income?: {
+    me?: IncomeSourceConfig;
+    wife?: IncomeSourceConfig;
+    rent?: IncomeSourceConfig;
+    [key: string]: IncomeSourceConfig | undefined;
   };
 }
 
@@ -27,6 +49,7 @@ export interface SpendEntry {
   amount: number;
   date: string;
   note: string;
+  member?: string;
   created?: number;
 }
 
@@ -35,11 +58,16 @@ export interface SpendFormState {
   amount: string;
   date: string;
   note: string;
+  member: string;
   edit: string | null;
 }
 
 export interface Calculations {
   income: number;
+  incomeByMember: Record<string, number>;
+  incomeBySource: Record<string, number>;
+  spentByMember: Record<string, number>;
+  netByMember: Record<string, number>;
   per: Record<string, { s: number; o: number; t: number }>;
   by: Record<string, number>;
   spent: number;

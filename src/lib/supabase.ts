@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
-import { BudgetConfig, Category, SpendEntry } from '../types';
+import { BudgetConfig, Category, SpendEntry, IncomeEntry } from '../types';
 import { defCats, defCfg } from '../utils';
+import { DEFAULT_MEMBERS } from '../constants';
 
 let cachedClient: SupabaseClient | null = null;
 let currentUrl = '';
@@ -67,16 +68,18 @@ export function getSupabase(): SupabaseClient | null {
 export async function fetchRemoteBudgetData(userId: string): Promise<{
   cats: Category[];
   spends: SpendEntry[];
+  incomes: IncomeEntry[];
   cfg: BudgetConfig;
 } | null> {
   const supabase = getSupabase();
   if (!supabase || !userId) return null;
 
   try {
-    const [catsRes, spendsRes, cfgRes] = await Promise.all([
+    const [catsRes, spendsRes, cfgRes, incomesRes] = await Promise.all([
       supabase.from('budget_categories').select('*').order('order_num', { ascending: true }),
       supabase.from('budget_spends').select('*').order('date', { ascending: true }),
       supabase.from('budget_config').select('*').maybeSingle(),
+      supabase.from('budget_incomes').select('*').order('date', { ascending: true }),
     ]);
 
     if (catsRes.error) throw catsRes.error;
@@ -100,8 +103,23 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
       amount: Number(row.amount) || 0,
       date: String(row.date),
       note: String(row.note || ''),
+      member: String(row.member || ''),
       created: row.created ? Number(row.created) : undefined,
     }));
+
+    // Incomes (safe handling if table hasn't been created yet in user's Supabase project)
+    let incomes: IncomeEntry[] = [];
+    if (!incomesRes.error && Array.isArray(incomesRes.data)) {
+      incomes = incomesRes.data.map((row) => ({
+        id: String(row.id),
+        source: String(row.source || 'Miscellaneous'),
+        member: String(row.member || ''),
+        amount: Number(row.amount) || 0,
+        date: String(row.date),
+        note: String(row.note || ''),
+        created: row.created ? Number(row.created) : undefined,
+      }));
+    }
 
     const d = defCfg();
     let cfg: BudgetConfig = d;
@@ -109,6 +127,10 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
       cfg = {
         periodStart: cfgRes.data.period_start || d.periodStart,
         periodEnd: cfgRes.data.period_end || d.periodEnd,
+        members:
+          Array.isArray(cfgRes.data.members) && cfgRes.data.members.length > 0
+            ? cfgRes.data.members
+            : d.members,
         income: { ...d.income, ...(cfgRes.data.income || {}) },
       };
     } else {
@@ -118,11 +140,12 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
         period_start: d.periodStart,
         period_end: d.periodEnd,
         income: d.income,
+        members: d.members,
         updated_at: new Date().toISOString(),
       });
     }
 
-    return { cats, spends, cfg };
+    return { cats, spends, incomes, cfg };
   } catch (error) {
     console.error('Error fetching Supabase data:', error);
     throw error;
@@ -132,6 +155,7 @@ export async function fetchRemoteBudgetData(userId: string): Promise<{
 export async function seedInitialUserData(userId: string): Promise<{
   cats: Category[];
   spends: SpendEntry[];
+  incomes: IncomeEntry[];
   cfg: BudgetConfig;
 }> {
   const supabase = getSupabase();
@@ -151,10 +175,11 @@ export async function seedInitialUserData(userId: string): Promise<{
       period_start: cfg.periodStart,
       period_end: cfg.periodEnd,
       income: cfg.income,
+      members: cfg.members,
       updated_at: new Date().toISOString(),
     });
   }
-  return { cats, spends: [], cfg };
+  return { cats, spends: [], incomes: [], cfg };
 }
 
 export async function saveSpendToSupabase(userId: string, s: SpendEntry) {
@@ -168,6 +193,7 @@ export async function saveSpendToSupabase(userId: string, s: SpendEntry) {
       amount: Number(s.amount) || 0,
       date: String(s.date),
       note: String(s.note || ''),
+      member: String(s.member || ''),
       created: s.created ? Number(s.created) : Date.now(),
     };
     await supabase.from('budget_spends').upsert(row);
@@ -183,6 +209,36 @@ export async function deleteSpendFromSupabase(userId: string, spendId: string) {
     await supabase.from('budget_spends').delete().match({ user_id: userId, id: spendId });
   } catch (e) {
     console.error('Delete spend error in Supabase:', e);
+  }
+}
+
+export async function saveIncomeToSupabase(userId: string, inc: IncomeEntry) {
+  const supabase = getSupabase();
+  if (!supabase || !userId) return;
+  try {
+    const row = {
+      id: String(inc.id),
+      user_id: userId,
+      source: String(inc.source || 'Miscellaneous'),
+      member: String(inc.member || ''),
+      amount: Number(inc.amount) || 0,
+      date: String(inc.date),
+      note: String(inc.note || ''),
+      created: inc.created ? Number(inc.created) : Date.now(),
+    };
+    await supabase.from('budget_incomes').upsert(row);
+  } catch (e) {
+    console.error('Save income error in Supabase:', e);
+  }
+}
+
+export async function deleteIncomeFromSupabase(userId: string, incomeId: string) {
+  const supabase = getSupabase();
+  if (!supabase || !userId) return;
+  try {
+    await supabase.from('budget_incomes').delete().match({ user_id: userId, id: incomeId });
+  } catch (e) {
+    console.error('Delete income error in Supabase:', e);
   }
 }
 
@@ -222,6 +278,7 @@ export async function saveConfigToSupabase(userId: string, cfg: BudgetConfig) {
       period_start: cfg.periodStart,
       period_end: cfg.periodEnd,
       income: cfg.income,
+      members: cfg.members,
       updated_at: new Date().toISOString(),
     });
   } catch (e) {
@@ -229,11 +286,14 @@ export async function saveConfigToSupabase(userId: string, cfg: BudgetConfig) {
   }
 }
 
-export async function resetUserDataInSupabase(userId: string): Promise<{ cats: Category[]; spends: SpendEntry[]; cfg: BudgetConfig }> {
+export async function resetUserDataInSupabase(
+  userId: string
+): Promise<{ cats: Category[]; spends: SpendEntry[]; incomes: IncomeEntry[]; cfg: BudgetConfig }> {
   const supabase = getSupabase();
   if (!supabase || !userId) throw new Error('Not connected');
-  // Delete all existing spends
+  // Delete all existing spends & incomes
   await supabase.from('budget_spends').delete().eq('user_id', userId);
-  // Re-seed default categories
+  await supabase.from('budget_incomes').delete().eq('user_id', userId);
+  // Re-seed default categories & config
   return await seedInitialUserData(userId);
 }
