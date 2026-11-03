@@ -14,6 +14,7 @@ import { DEFAULT_MEMBERS, DEFAULT_INCOME_SOURCES } from '../constants';
 import {
   getSupabase,
   fetchRemoteBudgetData,
+  checkSchemaStatus,
   saveSpendToSupabase,
   deleteSpendFromSupabase,
   saveIncomeToSupabase,
@@ -35,6 +36,11 @@ interface BudgetContextType {
   user: User | null;
   loadingAuth: boolean;
   loadingData: boolean;
+  needsSchemaMigration: boolean;
+  isSchemaModalOpen: boolean;
+  openSchemaModal: () => void;
+  closeSchemaModal: () => void;
+  recheckSchema: () => Promise<boolean>;
   signOut: () => Promise<void>;
   tab: TabType;
   setTab: (t: TabType) => void;
@@ -80,6 +86,8 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [user, setUser] = useState<User | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
+  const [needsSchemaMigration, setNeedsSchemaMigration] = useState(false);
+  const [isSchemaModalOpen, setIsSchemaModalOpen] = useState(false);
 
   const [tab, setTabState] = useState<TabType>(() => {
     const hash = window.location.hash.replace('#', '') as TabType;
@@ -128,6 +136,19 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
+  }, []);
+
+  const openSchemaModal = useCallback(() => setIsSchemaModalOpen(true), []);
+  const closeSchemaModal = useCallback(() => setIsSchemaModalOpen(false), []);
+
+  const recheckSchema = useCallback(async (): Promise<boolean> => {
+    const status = await checkSchemaStatus();
+    if (status.hasMemberCol && status.hasIncomesTable) {
+      setNeedsSchemaMigration(false);
+      return true;
+    }
+    setNeedsSchemaMigration(true);
+    return false;
   }, []);
 
   const setTab = useCallback((t: TabType) => {
@@ -184,6 +205,16 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           setSpends(data.spends);
           setIncomes(data.incomes || []);
           setCfg(data.cfg);
+          if (data.schemaNotice) {
+            setNeedsSchemaMigration(true);
+          } else {
+            // Also verify member column
+            checkSchemaStatus().then((res) => {
+              if (isMounted) {
+                setNeedsSchemaMigration(!res.hasMemberCol || !res.hasIncomesTable);
+              }
+            });
+          }
           if (data.cats.length > 0) {
             setForm((f) => ({
               ...f,
@@ -310,8 +341,15 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setSpends((prev) => [...prev, spendItem]);
       }
 
-      // Direct write to Supabase
-      saveSpendToSupabase(user.id, spendItem);
+      // Direct write to Supabase with error reporting & migration detection
+      saveSpendToSupabase(user.id, spendItem).then((res) => {
+        if (!res.success) {
+          showToast('Failed to save to database: ' + (res.error || 'Unknown error'));
+        } else if (res.needsMigration) {
+          setNeedsSchemaMigration(true);
+          showToast('Saved to cloud (fallback mode). Run the SQL script in Supabase to enable the member column.');
+        }
+      });
 
       setForm({
         cat: catId,
@@ -411,7 +449,14 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setIncomes((prev) => [...prev, incomeItem]);
       }
 
-      saveIncomeToSupabase(user.id, incomeItem);
+      saveIncomeToSupabase(user.id, incomeItem).then((res) => {
+        if (!res.success) {
+          showToast('Failed to save income to database: ' + (res.error || 'Unknown error'));
+        } else if (res.needsMigration) {
+          setNeedsSchemaMigration(true);
+          showToast('Saved to cloud backup. Run the SQL script in Supabase to create the budget_incomes table.');
+        }
+      });
 
       setIncomeForm({
         source,
@@ -643,6 +688,11 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         user,
         loadingAuth,
         loadingData,
+        needsSchemaMigration,
+        isSchemaModalOpen,
+        openSchemaModal,
+        closeSchemaModal,
+        recheckSchema,
         signOut,
         tab,
         setTab,

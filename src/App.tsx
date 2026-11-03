@@ -8,9 +8,11 @@ import { IncomeTab } from './components/IncomeTab';
 import { Toast } from './components/Toast';
 import { AuthScreen } from './components/AuthScreen';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { DatabaseSetupBanner } from './components/DatabaseSetupBanner';
+import { DatabaseSetupModal } from './components/DatabaseSetupModal';
 
 export const AppContent: React.FC = () => {
-  const { user, loadingAuth, loadingData, tab } = useBudget();
+  const { user, loadingAuth, loadingData, tab, isSchemaModalOpen, closeSchemaModal } = useBudget();
 
   if (loadingAuth) {
     return (
@@ -33,6 +35,7 @@ export const AppContent: React.FC = () => {
   return (
     <div id="app">
       <Header />
+      <DatabaseSetupBanner />
       {loadingData ? (
         <div className="card" style={{ textAlign: 'center', padding: '40px 20px' }}>
           <p className="muted">Fetching your cloud ledger from Supabase…</p>
@@ -47,6 +50,7 @@ export const AppContent: React.FC = () => {
       )}
       <Toast />
       <OfflineIndicator />
+      <DatabaseSetupModal isOpen={isSchemaModalOpen} onClose={closeSchemaModal} />
     </div>
   );
 };

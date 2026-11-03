@@ -24,6 +24,7 @@ export const IncomeTab: React.FC = () => {
     armed,
     setArmed,
     showToast,
+    openSchemaModal,
   } = useBudget();
 
   const members = cfg.members && cfg.members.length > 0 ? cfg.members : DEFAULT_MEMBERS;
@@ -565,6 +566,13 @@ export const IncomeTab: React.FC = () => {
             onClick={handleRestoreClick}
           >
             Restore from JSON
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={openSchemaModal}
+          >
+            ⚙️ Database SQL Setup
           </button>
           <button
             type="button"

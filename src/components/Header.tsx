@@ -6,7 +6,7 @@ import { TabType } from '../types';
 import { PWAInstallButton } from './PWAInstallButton';
 
 export const Header: React.FC = () => {
-  const { tab, setTab, cfg, calculations, user, signOut } = useBudget();
+  const { tab, setTab, cfg, calculations, user, signOut, needsSchemaMigration, openSchemaModal } = useBudget();
   const v = verdict(calculations.projSave);
 
   return (
@@ -18,7 +18,7 @@ export const Header: React.FC = () => {
             Budget year {fmtD(cfg.periodStart)} to {fmtD(cfg.periodEnd)} · {Math.round(calculations.frac * 100)}% elapsed
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <div className="headfig">
             <span className="label">Projected year-end</span>
             <b className={`num ${v[1]}`}>
@@ -26,6 +26,17 @@ export const Header: React.FC = () => {
             </b>
           </div>
           <PWAInstallButton />
+          {needsSchemaMigration && (
+            <button
+              type="button"
+              className="btn small"
+              onClick={openSchemaModal}
+              style={{ background: 'var(--warn-bg)', borderColor: 'var(--warn)', color: 'var(--warn)' }}
+              title="Click to view SQL script for Supabase"
+            >
+              ⚙️ DB Setup
+            </button>
+          )}
           {user && (
             <button
               type="button"
