@@ -16,7 +16,7 @@ export const SQL_MIGRATION_SCRIPT = `-- Run this in Supabase Dashboard -> SQL Ed
 alter table public.budget_spends add column if not exists member text default '';
 
 -- Safely adds 'members' column to config
-alter table public.budget_config add column if not exists members jsonb default '["Saroj", "Wife"]'::jsonb;
+alter table public.budget_config add column if not exists members jsonb default '["Husband", "Wife"]'::jsonb;
 
 -- Create budget_incomes table for transactional family income
 create table if not exists public.budget_incomes (

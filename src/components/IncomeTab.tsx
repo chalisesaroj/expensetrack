@@ -34,6 +34,11 @@ export const IncomeTab: React.FC = () => {
   const [memberInputs, setMemberInputs] = useState<string[]>(members);
   const [newMemberName, setNewMemberName] = useState('');
 
+  // Sync member inputs whenever user data loads from database
+  React.useEffect(() => {
+    setMemberInputs(members);
+  }, [members]);
+
   // Income table filters
   const [filterMember, setFilterMember] = useState<string>('all');
   const [filterSource, setFilterSource] = useState<string>('all');
@@ -68,7 +73,7 @@ export const IncomeTab: React.FC = () => {
     e.preventDefault();
     saveIncome(
       incomeForm.source || DEFAULT_INCOME_SOURCES[0],
-      incomeForm.member || members[0] || 'Saroj',
+      incomeForm.member || members[0] || 'Husband',
       incomeForm.amount,
       incomeForm.date,
       incomeForm.note
@@ -152,7 +157,7 @@ export const IncomeTab: React.FC = () => {
           <div>
             <h2>Family Members & Earners</h2>
             <p className="muted" style={{ fontSize: 13 }}>
-              Enter the names of the two persons (or family members) contributing to income and expenses.
+              Default names are <b>Husband</b> and <b>Wife</b>. Click &quot;Edit names&quot; to customize them for your family. Your custom names are saved to your cloud account and will load automatically on every login.
             </p>
           </div>
           <button
@@ -266,7 +271,7 @@ export const IncomeTab: React.FC = () => {
             Received by (Person)
             <select
               id="inc-member"
-              value={incomeForm.member || members[0] || 'Saroj'}
+              value={incomeForm.member || members[0] || 'Husband'}
               onChange={(e) => updateIncomeFormField('member', e.target.value)}
             >
               {members.map((m) => (

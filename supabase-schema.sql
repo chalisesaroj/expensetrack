@@ -55,12 +55,12 @@ create table if not exists public.budget_config (
   period_start text not null,
   period_end text not null,
   income jsonb not null default '{}'::jsonb,
-  members jsonb not null default '["Saroj", "Wife"]'::jsonb,
+  members jsonb not null default '["Husband", "Wife"]'::jsonb,
   updated_at timestamptz not null default now()
 );
 
 -- Safely add 'members' column to budget_config if it was created previously
-alter table public.budget_config add column if not exists members jsonb default '["Saroj", "Wife"]'::jsonb;
+alter table public.budget_config add column if not exists members jsonb default '["Husband", "Wife"]'::jsonb;
 
 -- 6. Enable Row Level Security (RLS) on all tables
 alter table public.budget_categories enable row level security;

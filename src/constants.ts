@@ -1,6 +1,6 @@
 export const KEY = 'budgetBook.v1';
 
-export const DEFAULT_MEMBERS = ['Saroj', 'Wife'];
+export const DEFAULT_MEMBERS = ['Husband', 'Wife'];
 
 export const DEFAULT_INCOME_SOURCES: string[] = [
   'Salary',

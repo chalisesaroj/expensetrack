@@ -115,13 +115,13 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     amount: '',
     date: today(),
     note: '',
-    member: DEFAULT_MEMBERS[0] || 'Saroj',
+    member: DEFAULT_MEMBERS[0] || 'Husband',
     edit: null,
   });
 
   const [incomeForm, setIncomeForm] = useState<IncomeFormState>({
     source: DEFAULT_INCOME_SOURCES[0] || 'Salary',
-    member: DEFAULT_MEMBERS[0] || 'Saroj',
+    member: DEFAULT_MEMBERS[0] || 'Husband',
     amount: '',
     date: today(),
     note: '',
@@ -272,7 +272,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       amount: '',
       date: today(),
       note: '',
-      member: members[0] || 'Saroj',
+      member: members[0] || 'Husband',
       edit: null,
     }));
   }, [cats, members]);
@@ -286,7 +286,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         amount: String(num(e.amount)),
         date: e.date || today(),
         note: e.note || '',
-        member: e.member || members[0] || 'Saroj',
+        member: e.member || members[0] || 'Husband',
         edit: id,
       });
       setArmed(null);
@@ -387,7 +387,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const resetIncomeForm = useCallback(() => {
     setIncomeForm((prev) => ({
       source: prev.source || DEFAULT_INCOME_SOURCES[0],
-      member: prev.member || members[0] || 'Saroj',
+      member: prev.member || members[0] || 'Husband',
       amount: '',
       date: today(),
       note: '',
@@ -401,7 +401,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!inc) return;
       setIncomeForm({
         source: inc.source,
-        member: inc.member || members[0] || 'Saroj',
+        member: inc.member || members[0] || 'Husband',
         amount: String(num(inc.amount)),
         date: inc.date || today(),
         note: inc.note || '',
@@ -431,7 +431,7 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         showToast('Pick an income date.');
         return false;
       }
-      const chosenMember = member || members[0] || 'Saroj';
+      const chosenMember = member || members[0] || 'Husband';
 
       const incomeItem: IncomeEntry = {
         id: incomeForm.edit || uid('inc'),
@@ -556,14 +556,60 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         showToast('You must have at least one family member.');
         return;
       }
+
+      // Check if any member was renamed so we can migrate existing entries smoothly
+      const oldMembers = cfg.members && cfg.members.length > 0 ? cfg.members : DEFAULT_MEMBERS;
+      const renameMap: Record<string, string> = {};
+      oldMembers.forEach((oldName, idx) => {
+        if (clean[idx] && clean[idx] !== oldName) {
+          renameMap[oldName] = clean[idx];
+        }
+      });
+
       setCfg((prev) => {
         const updated = { ...prev, members: clean };
         saveConfigToSupabase(user.id, updated);
         return updated;
       });
-      showToast('Family members updated');
+
+      // If any member was renamed, update existing spends and incomes that used the old name
+      if (Object.keys(renameMap).length > 0) {
+        setSpends((prev) =>
+          prev.map((s) => {
+            if (s.member && renameMap[s.member]) {
+              const updatedSpend = { ...s, member: renameMap[s.member] };
+              saveSpendToSupabase(user.id, updatedSpend);
+              return updatedSpend;
+            }
+            return s;
+          })
+        );
+
+        setIncomes((prev) =>
+          prev.map((inc) => {
+            if (inc.member && renameMap[inc.member]) {
+              const updatedIncome = { ...inc, member: renameMap[inc.member] };
+              saveIncomeToSupabase(user.id, updatedIncome);
+              return updatedIncome;
+            }
+            return inc;
+          })
+        );
+      }
+
+      setForm((f) => ({
+        ...f,
+        member: clean[0] || f.member,
+      }));
+
+      setIncomeForm((inf) => ({
+        ...inf,
+        member: clean[0] || inf.member,
+      }));
+
+      showToast('Family member names saved to database!');
     },
-    [user, showToast]
+    [user, cfg.members, showToast]
   );
 
   const updatePeriod = useCallback(
@@ -621,12 +667,12 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         amount: '',
         date: today(),
         note: '',
-        member: mergedCfg.members[0] || 'Saroj',
+        member: mergedCfg.members[0] || 'Husband',
         edit: null,
       });
       setIncomeForm({
         source: DEFAULT_INCOME_SOURCES[0],
-        member: mergedCfg.members[0] || 'Saroj',
+        member: mergedCfg.members[0] || 'Husband',
         amount: '',
         date: today(),
         note: '',
@@ -658,12 +704,12 @@ export const BudgetProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         amount: '',
         date: today(),
         note: '',
-        member: fresh.cfg.members[0] || 'Saroj',
+        member: fresh.cfg.members[0] || 'Husband',
         edit: null,
       });
       setIncomeForm({
         source: DEFAULT_INCOME_SOURCES[0],
-        member: fresh.cfg.members[0] || 'Saroj',
+        member: fresh.cfg.members[0] || 'Husband',
         amount: '',
         date: today(),
         note: '',
